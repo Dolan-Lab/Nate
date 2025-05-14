@@ -1,0 +1,132 @@
+---
+title: "DiffAbundance"
+author: "Nathan Haywood"
+date: "2024-10-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Loading all of the necessary libraries for this pipeline
+```{r}
+library(speckle)
+library(Seurat)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+library(ggrepel) #Repels text on ggplots 
+library(tidyr)
+library(limma) #Using the makecontasts function 
+library(rstatix) #contains add_significance function and totally overhauals the stats functions 
+library(ggsignif) #adds a significance geom 
+library(gridExtra) #Making easy grid of ggplots with grid.arrange
+library(ggpubr) #Upgraded and prettier add on to ggplot, also includes significance bars 
+library(qs)
+library(patchwork)
+```
+
+Load in and quickly check the annotated microglia object
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mg <- qread("annotatedMicroglia.qs")
+DimPlot(mg, label = T, raster=FALSE) + plot_annotation("MG clustering")
+
+Idents(mg) <- mg$seurat_clusters
+table(mg$seurat_clusters)
+```
+
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders")
+sampleSheet <- read.csv("ATF3_sampleSheet.csv")
+
+sampleSheet <- sampleSheet %>% select(Brain_id, Genotype, Sex.)
+sampleSheet$Genotype[sampleSheet$Genotype == "ATF3 fl/fl hom; Cx3cr1 creER"] <- "treatment"
+sampleSheet$Genotype[sampleSheet$Genotype == "ATF3 fl/fl hom"] <- "wildType"
+sampleSheet$group <- sampleSheet$Genotype
+
+#View(sampleSheet)
+```
+
+```{r}
+dt <- data.frame() #This dataframe will be updated for each contrast 
+plot_list<-list()
+
+
+#Calculate props by logit 
+props <- getTransformedProps(mg$seurat_clusters, mg$animal_id, transform="logit")
+sample.level <- sampleSheet %>% dplyr::arrange(Genotype) #Pull out the appropriate samples
+
+#Create a reality check plot 
+print(ggplot(as.data.frame(props$Proportions), aes(x = factor(sample, levels = sample.level$Brain_id), y = Freq, fill = clusters)) +
+          geom_bar(stat = 'identity', color="black") +
+          xlab("Animal Id") +
+          ylab("Proportions") +
+          theme_classic() +
+          theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))) #+
+          #scale_fill_manual(values=rev(c('#5F4690','#1D6996','#38A6A5','#0F8554','#73AF48','#EDAD08','#E17C05','#CC503E','#94346E'))) +
+          #ggtitle("Cluster prop by sample - LPC vs PBS (macs)", subtitle = paste0("Timepoint: ", i)))
+  
+
+
+
+#Create contrasts for the t-tests 
+condition <- sampleSheet$Genotype
+design <-  model.matrix(~ 0 + condition)
+mycontr <- makeContrasts(conditiontreatment-conditionwildType, levels=design) #Use limma's make contrasts function 
+  
+#Perform the propeller t-test 
+res <- propeller.ttest(prop.list = props, 
+                         design =  design, 
+                         contrasts = mycontr, 
+                         robust = T, 
+                         trend = F, 
+                         sort = T)
+  
+res$clusters <- rownames(res)
+print(res)
+dt <- rbind(dt, res) #update the dataframe 
+```
+
+
+```{r}
+#Create an additional plot by condition
+tmp <- res %>% 
+    dplyr::select(clusters, PropMean.conditionwildType, PropMean.conditiontreatment) %>% 
+    dplyr::rename(wildType = PropMean.conditionwildType, treatment = PropMean.conditiontreatment) %>% 
+    pivot_longer(cols = !clusters, names_to = "sample", values_to = "Freq") %>% 
+    as.data.frame()
+  
+tmp$sample <- factor(tmp$sample, levels = c('wildType', 'treatment'))
+plot_list<-ggplot(tmp, aes(x = sample, y = Freq, fill = clusters)) +
+    geom_bar(stat = 'identity',color="black") +
+    xlab("Condition") +
+    ylab("Proportions") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    #scale_fill_manual(values=rev(c('#5F4690','#1D6996','#38A6A5','#0F8554','#73AF48','#EDAD08','#E17C05','#CC503E','#94346E'))) +
+    ggtitle(label = "Temp")
+  
+#Create strip plots 
+#par(mfrow=c(3,3))
+for(j in seq(1,7,1)){
+    stripchart(props$Proportions[j,]~condition,
+               vertical=TRUE, pch=16, method="jitter",
+               #col = rev(c('#5F4690','#1D6996','#38A6A5','#0F8554','#73AF48','#EDAD08','#E17C05','#CC503E','#94346E')),
+               cex=2, ylab="Proportions")
+    title(rownames(props$Proportions)[j])
+}
+plot_list
+
+#save final results
+dt <- dt %>% add_significance("FDR")
+dt
+#write.csv(dt, "outputs/macs_cluster_prop_LPCvsPBS_ttest.csv")
+```
+
+
+
+
+

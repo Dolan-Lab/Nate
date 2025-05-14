@@ -1,0 +1,99 @@
+---
+title: "16_Pseudotime_Analysis"
+author: "Nathan Haywood"
+date: "2025-05-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(monocle3)
+library(Seurat)
+library(dplyr)
+library(qs)
+```
+
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mg <- qread("3_annotatedMicroglia.qs")
+DimPlot(mg, label = T, raster=FALSE)
+
+
+expression_matrix <- mg[["RNA"]]$counts
+cell_metadata <- mg[[]]
+gene_annotation <- data.frame(
+  gene_short_name = rownames(expression_matrix),
+  row.names = rownames(expression_matrix)
+)
+
+# Create Monocle 3 CellDataSet
+cds <- new_cell_data_set(expression_matrix,
+                         cell_metadata = cell_metadata,
+                         gene_metadata = gene_annotation)
+```
+
+
+Ordering the cells in pseudotime
+```{r}
+cds <- preprocess_cds(cds, num_dim = 50)
+cds <- reduce_dimension(cds)
+cds <- cluster_cells(cds)
+cds <- learn_graph(cds)
+cds <- order_cells(cds)
+
+plot_cells(cds)
+
+plot_cells(cds, genes=c("Tmem119", "Lpl", "Gpnmb", "Cxcl10"))
+
+```
+
+```{r}
+cds_3d <- reduce_dimension(cds, max_components = 3)
+cds_3d <- cluster_cells(cds_3d)
+cds_3d <- learn_graph(cds_3d)
+cds_3d <- order_cells(cds_3d, root_pr_nodes=get_earliest_principal_node(cds))
+
+cds_3d_plot_obj <- plot_cells_3d(cds_3d, color_cells_by="partition")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,311 @@
+---
+title: "Misc_DEGs"
+author: "Nathan Haywood"
+date: "2024-12-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Loading all of the necessary libraries for this pipeline
+```{r}
+library(Seurat)
+library(tibble)
+library(dplyr)
+library(Matrix)
+library(patchwork)
+library(vsn)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(limma)
+library(edgeR)
+library(caret)
+library(qs)
+library(viridis)
+library(pals)
+library(purrr)
+library(UpSetR)
+library(ComplexHeatmap)
+```
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mg <- qread("annotatedMicroglia.qs")
+DimPlot(mg, label = T, raster=FALSE) + plot_annotation("MG clustering")
+Idents(mg) <- mg$seurat_clusters
+```
+
+```{r}
+runDEGsGenotype <- function(matrix, outputList){
+  y <- Seurat2PB(matrix, sample = "animal_id", cluster = "Genotype")
+  
+  keep.samples <- y$samples$lib.size > 5e4 
+  table(keep.samples)
+  y <- y[,keep.samples]
+
+  keep.genes <- filterByExpr(y, group = y$samples$cluster)
+  table(keep.genes) 
+  y <- y[keep.genes, , keep.lib.sizes=FALSE]
+
+  y <- normLibSizes(y) 
+  
+  cluster <- factor(y$samples$cluster)
+  animal <- factor(y$samples$sample)
+  design <- model.matrix(~ cluster) 
+  colnames(design) <- gsub("animal", "", colnames(design))
+  colnames(design)[1] <- "Int"
+
+  y <- estimateDisp(y, design, robust=TRUE)
+
+  fit <- glmQLFit(y, design, robust=TRUE)
+
+  ncls <- nlevels(cluster)
+  contr <- rbind(matrix(1/(1-ncls), ncls, ncls),
+                 matrix(0, ncol(design)-ncls, ncls))
+  diag(contr) <- 1
+  contr[1,] <- 0
+  rownames(contr) <- colnames(design)
+  colnames(contr) <- paste0("cluster", levels(cluster))
+
+  qlf <- list()
+  for(i in 1:ncls){
+    qlf[[i]] <- glmQLFTest(fit, contrast=contr[,i])
+    qlf[[i]]$comparison <- paste0("cluster", levels(cluster)[i], "_vs_others")
+  }
+
+  dt <- lapply(lapply(qlf, decideTestsDGE), summary) 
+  dt.all <- do.call("cbind", dt)
+
+  df <- data.frame()
+  for(i in 1:ncls){
+    t <- topTags(qlf[[i]], n = Inf)$table #Takes all genes as p.value=1 as default 
+    t$comparison <- paste(qlf[[i]]$comparison)
+    df <- rbind(df, t)
+  }
+
+  outputList <- rbind(outputList, df)
+  return(outputList)
+}
+```
+
+```{r}
+degList <- data.frame()
+
+cxcl10 <- WhichCells(mg, expression = Cxcl10 > 0)
+ifit2 <- WhichCells(mg, expression = Ifit2 > 0)
+stat1 <- WhichCells(mg, expression = Stat1 > 0)
+
+cxcl10_obj <- subset(mg, cells = cxcl10)
+ifit2_obj <- subset(mg, cells = ifit2)
+stat1_obj <- subset(mg, cells= stat1)
+
+temp <- data.frame()
+cxcl10_degs <- runDEGsGenotype(cxcl10_obj, temp)
+ifit2_degs <- runDEGsGenotype(ifit2_obj, temp)
+stat1_degs <- runDEGsGenotype(stat1_obj, temp)
+```
+
+```{r}
+cxcl10_degs <- cxcl10_degs %>% dplyr::filter(PValue < 0.05, FDR < 0.05, abs(logFC)>0.5)
+ifit2_degs <- ifit2_degs %>% dplyr::filter(PValue < 0.05, FDR < 0.05, abs(logFC)>0.5)
+stat1_degs <- stat1_degs %>% dplyr::filter(PValue < 0.05, FDR < 0.05, abs(logFC)>0.5)
+
+View(cxcl10_degs)
+View(ifit2_degs)
+View(stat1_degs)
+```
+
+Cell #s by genotype
+```{r}
+sum(table(Idents(cxcl10_obj)))
+
+w <- subset(cxcl10_obj, Genotype == "ATF3 fl/fl hom")
+sum(table(Idents(w)))
+table(Idents(w))
+k <- subset(cxcl10_obj, Genotype == "ATF3 fl/fl hom; Cx3cr1 creER")
+sum(table(Idents(k)))
+```
+
+```{r}
+sum(table(Idents(ifit2_obj)))
+
+w <- subset(ifit2_obj, Genotype == "ATF3 fl/fl hom")
+sum(table(Idents(w)))
+k <- subset(ifit2_obj, Genotype == "ATF3 fl/fl hom; Cx3cr1 creER")
+sum(table(Idents(k)))
+```
+
+```{r}
+sum(table(Idents(stat1_obj)))
+
+w <- subset(stat1_obj, Genotype == "ATF3 fl/fl hom")
+sum(table(Idents(w)))
+k <- subset(stat1_obj, Genotype == "ATF3 fl/fl hom; Cx3cr1 creER")
+sum(table(Idents(k)))
+```
+
+
+```{r}
+#First identify CXCL10 expressing iMGLs 
+mg$CXCL10_exp<-"No"
+
+CXCL10hi_cells<-WhichCells(mg, expression = Cxcl10 > 0) #Tried different thresholds 
+mg@meta.data[CXCL10hi_cells,]$CXCL10_exp<-"Yes" #Read these high cells into the seurat object 
+
+table(mg$CXCL10_exp, mg$Genotype) #Examine the total numbers 
+DimPlot(mg, group.by = "CXCL10_exp")
+
+#Plot these cells per stimulation and n
+cells<-dplyr::select(mg@meta.data, orig.ident, Genotype, CXCL10_exp)
+counts<-dplyr::count(cells, orig.ident, CXCL10_exp, .drop=FALSE)
+id<-unique(dplyr::select(cells, orig.ident, Genotype))
+meta.data<-merge(x =id , y = counts, by= "orig.ident", all.y=TRUE)
+meta.data<-group_by(meta.data, orig.ident) 
+meta.data<-mutate(meta.data, per= prop.table(n) * 100)
+
+#Plot the number of cells per condition (improve the colors here)
+g<-ggplot(meta.data, aes(x=Genotype, y=per, fill=CXCL10_exp))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack")
+g<-g+theme_classic() +scale_y_continuous(expand = c(0, 0))
+g
+
+#Plot the proportion of CXCL10-expressing cells per cluster 
+meta.data.filtered<-filter(meta.data, CXCL10_exp=="Yes")
+
+g<-ggplot(meta.data.filtered, aes(x=Genotype, y=per, fill=Genotype))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack", color="black")
+g<-g+stat_summary(geom = "errorbar", fun.data = mean_se, width=.5)
+g<-g+geom_jitter(color="black", alpha=0.5, size=4, width=0.3)
+g<-g+theme_classic()
+g<-g+scale_fill_manual(values = c("#888888","#A5ADDA"))
+g
+
+#Run a t-test to confirm statistical significance 
+t.test(meta.data.filtered$n~meta.data.filtered$Genotype)
+```
+
+
+```{r}
+#First identify CXCL10 expressing iMGLs 
+mg$IFIT2_exp<-"No"
+
+IFIT2hi_cells<-WhichCells(mg, expression = Ifit2 > 0) #Tried different thresholds 
+mg@meta.data[IFIT2hi_cells,]$IFIT2_exp<-"Yes" #Read these high cells into the seurat object 
+
+table(mg$IFIT2_exp, mg$Genotype) #Examine the total numbers 
+DimPlot(mg, group.by = "IFIT2_exp")
+
+#Plot these cells per stimulation and n
+cells<-dplyr::select(mg@meta.data, orig.ident, Genotype, IFIT2_exp)
+counts<-dplyr::count(cells, orig.ident, IFIT2_exp, .drop=FALSE)
+id<-unique(dplyr::select(cells, orig.ident, Genotype))
+meta.data<-merge(x =id , y = counts, by= "orig.ident", all.y=TRUE)
+meta.data<-group_by(meta.data, orig.ident) 
+meta.data<-mutate(meta.data, per= prop.table(n) * 100)
+
+#Plot the number of cells per condition (improve the colors here)
+g<-ggplot(meta.data, aes(x=Genotype, y=per, fill=IFIT2_exp))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack")
+g<-g+theme_classic() +scale_y_continuous(expand = c(0, 0))
+g
+
+#Plot the proportion of CXCL10-expressing cells per cluster 
+meta.data.filtered<-filter(meta.data, IFIT2_exp=="Yes")
+
+g<-ggplot(meta.data.filtered, aes(x=Genotype, y=per, fill=Genotype))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack", color="black")
+g<-g+stat_summary(geom = "errorbar", fun.data = mean_se, width=.5)
+g<-g+geom_jitter(color="black", alpha=0.5, size=4, width=0.3)
+g<-g+theme_classic()
+g<-g+scale_fill_manual(values = c("#888888","#A5ADDA"))
+g
+
+#Run a t-test to confirm statistical significance 
+t.test(meta.data.filtered$n~meta.data.filtered$Genotype)
+```
+
+```{r}
+#First identify CXCL10 expressing iMGLs 
+mg$STAT1_exp<-"No"
+
+STAT1hi_cells<-WhichCells(mg, expression = Stat1 > 0) #Tried different thresholds 
+mg@meta.data[STAT1hi_cells,]$STAT1_exp<-"Yes" #Read these high cells into the seurat object 
+
+table(mg$STAT1_exp, mg$Genotype) #Examine the total numbers 
+DimPlot(mg, group.by = "STAT1_exp")
+
+#Plot these cells per stimulation and n
+cells<-dplyr::select(mg@meta.data, orig.ident, Genotype, STAT1_exp)
+counts<-dplyr::count(cells, orig.ident, STAT1_exp, .drop=FALSE)
+id<-unique(dplyr::select(cells, orig.ident, Genotype))
+meta.data<-merge(x =id , y = counts, by= "orig.ident", all.y=TRUE)
+meta.data<-group_by(meta.data, orig.ident) 
+meta.data<-mutate(meta.data, per= prop.table(n) * 100)
+
+#Plot the number of cells per condition (improve the colors here)
+g<-ggplot(meta.data, aes(x=Genotype, y=per, fill=STAT1_exp))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack")
+g<-g+theme_classic() +scale_y_continuous(expand = c(0, 0))
+g
+
+#Plot the proportion of CXCL10-expressing cells per cluster 
+meta.data.filtered<-filter(meta.data, STAT1_exp=="Yes")
+
+g<-ggplot(meta.data.filtered, aes(x=Genotype, y=per, fill=Genotype))
+g<-g+stat_summary(geom = "bar", fun= mean, position = "stack", color="black")
+g<-g+stat_summary(geom = "errorbar", fun.data = mean_se, width=.5)
+g<-g+geom_jitter(color="black", alpha=0.5, size=4, width=0.3)
+g<-g+theme_classic()
+g<-g+scale_fill_manual(values = c("#888888","#A5ADDA"))
+g
+
+#Run a t-test to confirm statistical significance 
+t.test(meta.data.filtered$n~meta.data.filtered$Genotype)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

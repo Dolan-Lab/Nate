@@ -1,0 +1,242 @@
+---
+title: "Initial_Cell_Type_Processing"
+author: "Nathan Haywood"
+date: "2024-10-21"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+Loading all of the necessary libraries for this analysis
+```{r}
+library(Seurat) 
+library(tidyselect)
+library(dplyr)
+library(data.table)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(presto)
+library(qs)
+```
+
+Setting the working directory to the raw data folder and loading in the necessary files
+  Because we are loading across multiple samples, each sample's sequencing data needs to be loaded individually and the files are merged into a single seurat object. Metadata from the experiment including the animal IDs, genotype and sex are loaded into new columns in the Seurat metadata section of the object.
+  
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders")
+
+samples<-list.files()
+
+for(i in 1:length(samples)) {
+  if(i==1) {
+    #Will initialize a Seurat object for the first file 
+    object<-Read10X(data.dir = samples[i])
+    object<-CreateSeuratObject(counts = object , min.cells = 3, min.features = 200, 
+                               project =samples[i])
+  }
+  if(i>1) {
+    temp<-Read10X(data.dir = samples[i])
+    temp<-CreateSeuratObject(counts = temp , min.cells = 3, min.features = 200, 
+                             project =samples[i])
+    temp<-RenameCells(object = temp, add.cell.id=i)
+    object<-merge(x = object, y = temp)
+    rm(temp)
+    print(i)
+  } #Will merge subsequent Seurat samples
+}
+nrow(object@meta.data) #56799 cells unfiltered 
+
+object<-JoinLayers(object) #NB: When using Seurat v5 
+
+#Annotate the cells with experimental information 
+animal.id<-sapply(strsplit(object@meta.data$orig.ident, "i", fixed=TRUE), "[", 2)
+animal.id<-sub(animal.id, pattern = "d230513", replacement = "")
+table(animal.id)  #Ensure cell counts match the cellranger outputs 
+object@meta.data$animal_id<-animal.id 
+
+#Read in the sample detail file
+ATF3.key<-read.csv("/Users/nate/Desktop/Mikes_ATF3_Data/ATF3_sampleSheet.csv")
+merge.meta<-merge(x = object@meta.data, y = ATF3.key, by.x="animal_id", by.y="Brain_id", sort=FALSE)
+object@meta.data$animal_id<-merge.meta$animal_id
+object@meta.data$Tube_id <-merge.meta$Sample.ID. 
+object@meta.data$Genotype<-merge.meta$Genotype 
+object@meta.data$Sex<-merge.meta$Sex
+```
+Sample B has significantly fewer cells and will need to be adjusted for during downstream processing
+
+
+We will save this fully integrated data object to have a quick version of it to access in the future.
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+qsave(object, "integratedObject_noQC.qs")
+```
+
+First we will take a quick look at some QC metrics across all of the cells. We'll check for sample specific outliers and then continue by filtering on basic QC metrics across all of the samples. We'll check for mitochondrial contamination, low read and UMI counts before continuing with the standard seurat pipeline.
+```{r}
+object[["percent.mt"]] <- PercentageFeatureSet(object, pattern = "^mt-") #Use ^mt- for mouse 
+
+VlnPlot(object, "nFeature_RNA", pt.size = 0.1, group.by = "orig.ident") #Sample B looks a bit crappy 
+VlnPlot(object, "nFeature_RNA", pt.size = 0, group.by = "orig.ident") #Sample B looks a bit crappy 
+
+VlnPlot(object, "nCount_RNA", pt.size = 0.1, group.by = "orig.ident") #Sample B looks a bit crappy 
+VlnPlot(object, "nCount_RNA", pt.size = 0, group.by = "orig.ident") #Sample B looks a bit crappy 
+
+VlnPlot(object, "percent.mt", pt.size = 0.1, group.by = "orig.ident") 
+
+FeatureScatter(object, feature1 = "nCount_RNA", feature2 = "percent.mt", pt.size = .001, group.by = "orig.ident")
+FeatureScatter(object, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", pt.size = .001, group.by = "orig.ident")
+
+#Perform the filtering (examine cells in initial analysis)
+nrow(object@meta.data) #56799 cells unfiltered 
+object<-subset(object, subset = nFeature_RNA > 750 & nCount_RNA >1500)
+object<-subset(object, subset = nFeature_RNA < 6000 & nCount_RNA <50000  & percent.mt < 5)
+nrow(object@meta.data) #49764 filtered 
+```
+Again, a bit concerned about sample B across all metrics but it doesn't yet seem like we need to remove it.
+
+
+```{r}
+object <- NormalizeData(object, normalization.method = "LogNormalize", scale.factor = 10000)
+
+#Perform feature selection and plot the top variable genes 
+object <- FindVariableFeatures(object, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(object), 10)
+plot1 <- VariableFeaturePlot(object)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+#Perform the scaling of gene expression data (so that highly expressed genes do not dominate)
+all.genes <- rownames(object)
+object <- ScaleData(object, features = all.genes)
+
+#Perform the dimensional reduction and clustering 
+object <- RunPCA(object, features = VariableFeatures(object = object))
+object<-FindNeighbors(object, dims = 1:20)
+object<-FindClusters(object, resolution = 0.5) #Low resolution initially 
+
+#Run and plot data as a UMAP and tSNE
+object<-RunUMAP(object, dims = 1:20)
+DimPlot(object, reduction = "umap", label = T, pt.size = 0.01)
+DimPlot(object, reduction = "umap", group.by= "Genotype", label = T, pt.size = 0.01)
+DimPlot(object,group.by = "Genotype", split.by = "Sex", pt.size = 0.01, reduction = "umap", label = F)
+```
+Here we see a few populations that show definite differences between the control and experimental groups. A proportion of these are also shown to be sex dependent. We also see significant smaller populations that are likely doublets or other sources of contamination.
+
+The first step for identifying cluster cell types will be with a range of standard markers. On first pass, we want to filter out the neurons as we are primarily interested in the glial populations for this analysis.
+```{r}
+FeaturePlot(object, pt.size = 0.01,"C1qa", label = T) # Microglia and macrophage marker
+FeaturePlot(object, pt.size = 0.01, "Gfap", label = T) # Astrocyte marker (activated)
+FeaturePlot(object, pt.size = 0.01, "Slc1a3", label = T) # Astrocyte marker
+FeaturePlot(object, pt.size = 0.01, "Pdgfra", label = T) # OPC marker
+FeaturePlot(object, pt.size = 0.01, "Plp1", label = T) # Oligo marker
+FeaturePlot(object, pt.size = 0.01, "Snap25", label = T) # Neuronal but low expression levels in glia as well
+FeaturePlot(object, pt.size = 0.01, "Skap1", label = T) # lympocytes 
+FeaturePlot(object, pt.size = 0.01, "Tek", label = T) #Endothelial
+FeaturePlot(object, pt.size = 0.01, "Lyz2", label = T) #Macrophage
+FeaturePlot(object, pt.size = 0.01, "Cd3e", label = T) #Immune
+FeaturePlot(object, pt.size = 0.01, "Vtn", label = T) #Fibroblast/mural
+FeaturePlot(object, pt.size = 0.01, "Dcn", label = T) #Fibroblast/mural
+```
+
+Well add a metadata column to hold the rough cell type IDs
+```{r}
+object$cell_type <- NA
+
+for(i in 1: length(object$seurat_clusters)){
+  if(object$seurat_clusters[i] %in% c("0", "8", "28", "26", "17", "20", "21", "5", "24", "6", "13", "15", "12", "7", "31", "32", "4")){
+    object$cell_type[i] <- "neurons"
+  }
+  else if(object$seurat_clusters[i] %in% c("16", "2", "10")){
+    object$cell_type[i] <- "microglia"
+  }
+  else if(object$seurat_clusters[i] %in% c("9", "33", "23")){
+    object$cell_type[i] <- "OPCs"
+  }
+  else if(object$seurat_clusters[i] %in% c("1", "11", "14")){
+    object$cell_type[i] <- "oligos"
+  }
+  else if(object$seurat_clusters[i] %in% c("18", "30", "3")){
+    object$cell_type[i] <- "astrocytes"
+  }
+  else if(object$seurat_clusters[i] == "22"){
+    object$cell_type[i] <- "macrophages"
+  }
+  else if(object$seurat_clusters[i] %in% c("23", "25")){
+    object$cell_type[i] <- "fibroblast/meural"
+  }
+  else if(object$seurat_clusters[i] == "19"){
+    object$cell_type[i] <- "endothelial"
+  }
+  else(
+    object$cell_type[i] <- "other"
+  )
+}
+
+check <- subset(object, cell_type == "other")
+unique(check$seurat_clusters)
+```
+Cluster 27 lights up for both C1qa (microglia/macrophages) as well as Plp1 (oligos) which indicates its most likely a doublet population and can be filtered out at this point. Cluster 29 doesn't show any initial markers and will have to be checked manually with the top markers
+
+```{r}
+markers<-FindAllMarkers(object, min.pct = 0.1) #not specifying the test type uses wilcox as a standard which is efficient by the presto package
+#View(markers)
+top10 <- markers %>% group_by(cluster) %>% dplyr::filter(avg_log2FC > 1) %>% slice_head(n = 10) %>% ungroup()
+```
+Top enriched genes for cluster 29 (Zfp474, Tmem212, Sntn) all point to an ependyma cell type which can also be disregarded for this analysis.
+
+Well create subset objects for each of the cell types that were interested in for this analysis and save the respective objects for the next round of cleaning up and cell subtype analysis.
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+
+micro <- subset(object, cell_type == "microglia")
+qsave(micro, "microgliaObject.qs")
+astro <- subset(object, cell_type == "astrocytes")
+qsave(astro, "astrocyteObject.qs")
+macro <- subset(object, cell_type == "macrophages")
+qsave(macro, "macrophageObject.qs")
+oligo <- subset(object, cell_type == "oligos")
+qsave(oligo, "oligoObject.qs")
+OPC <- subset(object, cell_type == "OPCs")
+qsave(OPC, "OPCObject.qs")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

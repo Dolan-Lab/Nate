@@ -1,0 +1,76 @@
+---
+title: "DiffAbd_Milo"
+author: "Nathan Haywood"
+date: "2024-11-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(Seurat)
+library(qs)
+library(miloR)
+library(SingleCellExperiment)
+library(scater)
+library(scran)
+library(dplyr)
+library(patchwork)
+```
+
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mg <- qread("annotatedMicroglia.qs")
+DimPlot(mg, label = T, raster=FALSE) + plot_annotation("MG clustering")
+
+mg_sce <- as.SingleCellExperiment(mg)
+mg_milo <- Milo(mg_sce)
+```
+
+```{r}
+mg_milo <- buildGraph(mg_milo, k = 25, d = 25)
+mg_milo <- makeNhoods(mg_milo, prop = 0.2, k = 25, d=25, refined = TRUE)
+plotNhoodSizeHist(mg_milo)
+```
+
+
+```{r}
+mg_milo <- countCells(mg_milo, meta.data = data.frame(colData(mg_milo)), sample="orig.ident")
+head(nhoodCounts(mg_milo))
+```
+
+```{r}
+mg_design <- data.frame(colData(mg_milo))[,c("orig.ident", "Genotype")]
+mg_design <- distinct(mg_design)
+rownames(mg_design) <- mg_design$orig.ident
+mg_design <- mg_design[colnames(nhoodCounts(mg_milo)), , drop=FALSE]
+
+mg_design
+```
+
+
+```{r}
+mg_milo <- calcNhoodDistance(mg_milo, d=25)
+rownames(mg_design) <- mg_design$orig.ident
+da_results <- testNhoods(mg_milo, design = ~ Genotype, design.df = mg_design)
+da_results %>% arrange(- SpatialFDR) %>% head()
+```
+
+
+```{r}
+mg_milo <- buildNhoodGraph(mg_milo)
+plotUMAP(mg_milo) + plotNhoodGraphDA(mg_milo, da_results, alpha=0.05) + plot_layout(guides="collect")
+```
+
+
+
+
+
+
+
+
+
+

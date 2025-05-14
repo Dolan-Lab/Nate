@@ -1,0 +1,370 @@
+---
+title: "DEGs_Cluster_Controls"
+author: "Nathan Haywood"
+date: "2025-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+---
+title: "DEGs_Cluster"
+author: "Nathan Haywood"
+date: "2024-10-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Loading all of the necessary libraries for this pipeline
+```{r}
+library(Seurat)
+library(tibble)
+library(dplyr)
+library(Matrix)
+library(patchwork)
+library(vsn)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(limma)
+library(edgeR)
+library(caret)
+library(qs)
+library(viridis)
+library(pals)
+library(purrr)
+library(UpSetR)
+library(ComplexHeatmap)
+```
+
+Defining a custom function to create a matrix for each cluster from each animal 
+```{r}
+average_genes_per_cluster <- function(mat) {
+  # Get the column names of the matrix
+  sample_names <- colnames(mat)
+  
+  # Extract the cluster information from the sample names
+  clusters <- sapply(strsplit(sample_names, "_"), `[`, 2)
+  
+  # Create a list to store the average values per cluster
+  cluster_averages <- list()
+  
+  # Calculate the average for each cluster
+  for (cluster in unique(clusters)) {
+    # Find columns that correspond to the current cluster
+    cluster_columns <- grepl(cluster, sample_names)
+    
+    # Subset the matrix to only these columns
+    cluster_mat <- mat[, cluster_columns]
+    
+    # Calculate the mean across these columns (i.e., across animals)
+    cluster_average <- rowMeans(cluster_mat, na.rm = TRUE)
+    
+    # Store the average in the list with the name of the cluster
+    cluster_averages[[cluster]] <- cluster_average
+  }
+  
+  # Combine the list into a new matrix
+  average_matrix <- do.call(cbind, cluster_averages)
+  
+  # Assign the row names from the original matrix to the new matrix
+  rownames(average_matrix) <- rownames(mat)
+  
+  # Return the matrix of averages
+  return(average_matrix)
+}
+```
+
+Load in and quickly check the annotated microglia object
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mg <- qread("annotatedMicroglia.qs")
+DimPlot(mg, label = T, raster=FALSE) + plot_annotation("MG clustering")
+
+Idents(mg) <- mg$seurat_clusters
+table(mg$seurat_clusters)
+```
+
+Isolate the control samples for a DEG list to use in the GSEA analysis
+```{r}
+mg <- subset(mg, Genotype == "ATF3 fl/fl hom")
+```
+
+Pseudobulk and check the object to ensure that it still has the relevant data
+```{r}
+y <- Seurat2PB(mg, sample = "animal_id", cluster = "seurat_clusters") #Confirmed this is Sum of raw count
+head(y)
+```
+
+
+```{r}
+keep.samples <- y$samples$lib.size > 5e4 #Default, tried 1e5 and it gave identical results
+table(keep.samples)
+y <- y[,keep.samples]
+table(y$samples$cluster)
+
+# Filter out lowly expressed genes:
+keep.genes <- filterByExpr(y, group = y$samples$cluster)
+table(keep.genes) 
+y <- y[keep.genes, , keep.lib.sizes=FALSE]
+
+# TMM normalization
+y <- normLibSizes(y) #New name for calcNormFactors function
+summary(y$samples$norm.factors)
+```
+
+```{r}
+for (i in c('cluster', 'sample')) {
+  for (j in c(500)) {
+    tmp <- as.factor(y$samples[[i]])
+    levels(tmp) <- c('#88CCEE','#CC6677','#DDCC77','#117733','#332288','#AA4499','#44AA99','#999933','#882255','#661100','#6699CC','#888888',
+                     '#7F3C8D','#11A579','#3969AC','#F2B701','#E73F74','#80BA5A','#E68310','#008695','#CF1C90','#f97b72','#4b4b8f','#A5ADDA')[1:nlevels(tmp)]
+    
+    par(mfrow=c(1,3))
+    limma::plotMDS(y, pch=16, col=as.character(tmp), main="MDS", labels = as.factor(y$samples[[i]]), top = j)
+    limma::plotMDS(y, pch=16, dim.plot = c(3,4), col=as.character(tmp), main="MDS", labels = as.factor(y$samples[[i]]), top = j)
+    limma::plotMDS(y, pch=16, dim.plot = c(5,6), col=as.character(tmp), main="MDS", labels = as.factor(y$samples[[i]]), top = j)
+  }
+}
+```
+
+
+```{r}
+cluster <- factor(y$samples$cluster)
+animal <- factor(y$samples$sample)
+design <- model.matrix(~ cluster + animal) #This is pseudobulk specific matrix design because different clusters can come from the same animal and we do not want to compare timepoint and condition in this analysis
+colnames(design) <- gsub("animal", "", colnames(design))
+colnames(design)[1] <- "Int"
+head(design)
+
+# Dispersion estimation
+y <- estimateDisp(y, design, robust=TRUE)
+y$common.dispersion
+plotBCV(y)
+
+# QL (quasi-likelihood) dispersion: only using trend
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+
+# DEG identification
+ncls <- nlevels(cluster)
+contr <- rbind(matrix(1/(1-ncls), ncls, ncls),
+               matrix(0, ncol(design)-ncls, ncls))
+diag(contr) <- 1
+contr[1,] <- 0
+rownames(contr) <- colnames(design)
+colnames(contr) <- paste0("cluster", levels(cluster))
+head(contr)
+
+qlf <- list()
+for(i in 1:ncls){
+  qlf[[i]] <- glmQLFTest(fit, contrast=contr[,i])
+  qlf[[i]]$comparison <- paste0("cluster", levels(cluster)[i], "_vs_others")
+}
+
+# Table out the DEG results and save them 
+dt <- lapply(lapply(qlf, decideTestsDGE), summary) 
+dt.all <- do.call("cbind", dt)
+dt.all
+
+df <- data.frame()
+for(i in 1:ncls){
+  t <- topTags(qlf[[i]], n = Inf)$table #Takes all genes as p.value=1 as default 
+  t$comparison <- paste(qlf[[i]]$comparison)
+  df <- rbind(df, t)
+}
+nrow(df) #84735
+```
+
+
+```{r}
+macs.markers<-filter(df, FDR<0.05) #Only take significant genes, 18982
+macs.markers<-filter(macs.markers, abs(logFC)>0.5) #This is quite stringent logFC cut off 
+#View(macs.markers)
+
+geneList <- df["Gene", "Comparison"]
+for(i in unique(macs.markers$comparison)) {
+  topLFC <- macs.markers %>% subset(comparison == i) %>% arrange(desc(logFC))
+  topFDR <- macs.markers %>% subset(comparison == i) %>% arrange(FDR)
+  topHits <- c()
+  for(j in 1:length(topLFC$gene)){
+    if(topFDR$gene[j] %in% topLFC$gene){
+      topHits <- c(topHits, topFDR$gene[j])
+    }
+    if(topLFC$gene[j] %in% topFDR$gene){
+      topHits <- c(topHits, topLFC$gene[j])
+    }
+  }
+  topHits <- unique(topHits)
+  for(j in 1:15){
+    geneList <- rbind(geneList, list(topHits[j], i))
+  }
+}
+colnames(geneList) <- c("Gene", "Comparison")
+View(geneList)
+
+#write.csv(macs.markers, "outputs/pseudobulk_by_cluster/MG_PB_cluster_marker_full_gene_list.csv") 
+
+#STEP 4: Further examination of DEGs #### 
+
+#Create UpSet plots to justify the clustering. Using all DEGs 
+#Preprocess for upset plot 
+macs.markers<-mutate(macs.markers, Positive_gene=paste0(logFC>0,"_", gene)) #Distinguish between positive and negatively enriched genes so you can count both
+de_gs_by_con<-split(macs.markers, macs.markers$comparison)
+de_gs_by_con <- map(de_gs_by_con, "Positive_gene")
+
+#Run general upset plot, general and subtypes: 
+names(de_gs_by_con)
+upset(fromList(de_gs_by_con), text.scale = 1.4,
+      nsets=20, empty.intersections ="off", sets.bar.color = "#56B4E9")
+
+#STEP 5: Create volcano plots for specific contrasts ####
+
+# 'qlf' is your list of QLFTest objects and you select which comparision to plot 
+comparison_index <- which(sapply(qlf, function(x) x$comparison == "cluster4_vs_others")) # You need to define this based on your comparison naming convention
+```
+
+
+```{r}
+# Extract the DE results for this specific comparison
+deg_results <- topTags(qlf[[comparison_index]], n=Inf)$table
+
+# Create the volcano plot data
+volcano_data <- data.frame(logFC = deg_results$logFC,
+                           PValue = -log10(deg_results$PValue),
+                           FDR = deg_results$FDR)
+
+# Adding a column to differentiate significant DEGs based on FDR and logFC threshold
+volcano_data$Significant <- with(volcano_data, ifelse(FDR < 0.05 & abs(logFC) > 0.5, "Yes", "No"))
+volcano_data$Gene <- rownames(deg_results)
+```
+
+
+```{r}
+#Decide what genes to label (need to update this)
+temp <- geneList %>% subset(geneList[,2] == "cluster4_vs_others")
+genes_to_label_cluster4 <- unique(temp[,1])
+
+volcano_data$Label <- ifelse(volcano_data$Gene %in% genes_to_label_cluster4, volcano_data$Gene, "")
+```
+
+
+```{r}
+# Generating the volcano plot with 'ggplot2' and 'ggrepel' for labeling
+ggplot(volcano_data, aes(x=logFC, y=PValue)) +
+  geom_point(aes(color=Significant), alpha=0.5, shape=16) + # Apply color mapping only here
+  geom_label_repel(aes(label=Label), #from ggrepel 
+                   box.padding = 0, 
+                   point.padding = 0.5, 
+                   segment.color = 'grey50',
+                   color="black", # Set label color here, e.g., to blue
+                   min.segment.length = unit(0, 'lines'), 
+                   size=3, 
+                   max.overlaps = Inf,
+                   na.rm = TRUE) +
+  scale_color_manual(values=c("No"="grey50", "Yes"="red")) +
+  labs(x="Log Fold Change", y="-Log10(P-value)") +
+  theme_classic() +
+  theme(legend.title=element_blank())
+
+#Final modified volcano plot: Need to specify shape=16 due to bug in ggplot2 that does not apply alpha to points
+ggplot(data=volcano_data, aes(x=logFC, y=PValue)) +
+  geom_point(aes(color=Significant), alpha=0.4, shape=16) + # Apply color mapping only here. Need to specify shape=16 due to bug in ggplot2 that does not apply alpha to points
+  theme_classic() +
+  geom_text_repel(data = volcano_data, aes(label=Label), max.overlaps = Inf, min.segment.length = 0) +
+  scale_color_manual(values=c("darkblue", "red"))
+```
+
+
+```{r}
+#STEP 6: Create heatmaps of the top positive DEGs ####
+#Select top postive DEGs by logFC 
+topMarkers <- macs.markers %>% group_by(comparison) %>% top_n(100, logFC)  
+topMarkers <- unique(topMarkers$gene)
+View(topMarkers)
+
+#Calculate the CPM counts 
+lcpm <- edgeR::cpm(y, log=TRUE) 
+
+#Prepare the cluster annotations 
+annot <- data.frame(Cluster = paste0("Cluster ", factor(y$samples$cluster)),
+                    Animal = paste0(factor(y$samples$sample))) #Create annotations for heatmap 
+rownames(annot) <- colnames(y) #Create annotations for heatmap 
+
+ann_colors <- list(Cluster = c('#E58606','#5D69B1','#52BCA3','#99C945','#CC61B0','#24796C','#DAA51B','#2F8AC4','#764E9F','#ED645A','#CC3A8E','#A5AA99')[1:nlevels(as.factor(y$samples$cluster))],
+                   Animal = alphabet()[1:nlevels(as.factor(y$samples$sample))],
+                   Timepoint = c('#855C75','#D9AF6B','#AF6458','#736F4C'),
+                   Treatment = c('#332288','#888888')) #Annotation colors 
+
+names(ann_colors$Cluster) <- paste0("Cluster ", levels(cluster))
+names(ann_colors$Animal) <- paste0(levels(as.factor(y$samples$sample)))
+names(ann_colors$Timepoint) <- paste0(levels(as.factor((y$samples$Timepoint))))
+names(ann_colors$Treatment) <- paste0(levels(as.factor((y$samples$Condition))))
+
+#Plot the heatmap by animal (Note this command does scale and center by row)
+p <- pheatmap::pheatmap(lcpm[topMarkers,],
+                        show_rownames = F,
+                        breaks=seq(-2,2,length.out=101),
+                        color=inferno(100),
+                        scale="row",
+                        cluster_cols=T,
+                        border_color="NA",
+                        fontsize_row=10,
+                        treeheight_row=70,
+                        treeheight_col=70,
+                        cutree_cols=nlevels(as.factor(y$samples$cluster)), 
+                        clustering_method="ward.D2",
+                        show_colnames=T, 
+                        annotation_col=annot, 
+                        annotation_colors=ann_colors,
+                        main = "Top cluster markers - MG", 
+)
+
+print(p)
+
+#Plot the heatmap by mean per cluster (rerunning some of the code above to select genes)
+#Select top postive DEGs by logFC 
+topMarkers <- macs.markers %>% group_by(comparison) %>% top_n(100, logFC)  
+topMarkers <- unique(topMarkers$gene)
+
+#Calculate the CPM counts 
+lcpm <- edgeR::cpm(y, log=TRUE) 
+mat <- lcpm[topMarkers,]
+mat_averages <- average_genes_per_cluster(mat) #This function will create a matrix with averages from each animal per cluster. 
+head(mat_averages) # Print the matrix to see the averages
+mat_averages<-t(scale(t(mat_averages))) #Scale and center the matrix by rows (note scale only works on columns so need to transpose twice) before plotting 
+
+Genes.to.plot<-c("Ifit3", "Cxcl10", "Lpl","Ccl4", "Mmp9", "Spp1", "Gpnmb", "Adam33", "Atp6v0d2", "Colec12",
+                 "Lgals3", "B2m", "Cd74", "Tmem119", "P2ry12", "Ctse", "Sorl1", "Cenph", "Mki67", "Oasl2", "Stat2") #Label genes to highlight in the heatmap 
+
+Heatmap(mat_averages, cluster_columns = T, cluster_rows =F, show_column_names = TRUE,show_row_names = F ,show_row_dend = FALSE, show_column_dend =TRUE
+        ,name = " ")+rowAnnotation(link = anno_mark(at = which(rownames(mat_averages) %in% Genes.to.plot)
+                                                    ,labels = rownames(mat_averages)[which(rownames(mat_averages) %in% Genes.to.plot)]
+                                                    ,labels_gp = gpar(fontsize = 10), padding = unit(1, "mm")))
+
+Heatmap(mat_averages, cluster_columns = F, cluster_rows =F, show_column_names = TRUE,show_row_names = F ,show_row_dend = FALSE, show_column_dend =TRUE
+        ,name = " ")+rowAnnotation(link = anno_mark(at = which(rownames(mat_averages) %in% Genes.to.plot)
+                                                    ,labels = rownames(mat_averages)[which(rownames(mat_averages) %in% Genes.to.plot)]
+                                                    ,labels_gp = gpar(fontsize = 10), padding = unit(1, "mm")))
+
+
+Heatmap(mat_averages, column_title = "DEGs by cluster", cluster_columns = F, cluster_rows =F, show_column_names = TRUE,show_row_names = F ,show_row_dend = FALSE, show_column_dend =TRUE,name = " ")+rowAnnotation(link = anno_mark(at = which(rownames(mat_averages) %in% Genes.to.plot),labels = rownames(mat_averages)[which(rownames(mat_averages) %in% Genes.to.plot)],labels_gp = gpar(fontsize = 10), padding = unit(1, "mm")))
+```
+
+
+```{r}
+write.csv(macs.markers, "/Users/Nate/Desktop/Mikes_ATF3_Data/CSVs/Control_DEGs.csv")
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,235 @@
+---
+title: "Rough_CellType_Filtering"
+author: "Nathan Haywood"
+date: "2024-10-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Load the necessary libraries for this analysis
+```{r}
+library(Seurat) 
+library(tidyselect)
+library(dplyr)
+library(reshape2)
+library(DirichletReg)
+library(data.table)
+library(tibble)
+library(circlize)
+library(viridis)
+library(tidyr)
+library(ggplot2)
+library(presto)
+library(qs)
+library(purrr)
+library(UpSetR)
+```
+
+Well start with the microglia and go through each cell type to filter out any remaining debris from the data.
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+microgliaObject <- qread("microgliaObject.qs")
+```
+
+First we rerun the standard seurat pipeline on the new object to create a new UMAP and identify new marker genes for the clusters. Again, we will run a lower resolution on the clusters as we are just looking for outlier and are not yet searching for cell state markers.
+```{r}
+microgliaObject <- NormalizeData(microgliaObject, normalization.method = "LogNormalize", scale.factor = 10000)
+microgliaObject <- FindVariableFeatures(microgliaObject, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(microgliaObject)
+microgliaObject <- ScaleData(microgliaObject, features = all.genes)
+microgliaObject <- RunPCA(microgliaObject, features = VariableFeatures(object = microgliaObject))
+microgliaObject<-FindNeighbors(microgliaObject, dims = 1:20)
+microgliaObject<-FindClusters(microgliaObject, resolution = 0.2)   
+microgliaObject<-RunUMAP(microgliaObject, dims = 1:20)
+DimPlot(microgliaObject, reduction = "umap", label = T, pt.size = 0.02)
+```
+
+First steps are to identify the outlier clusters: 4, 5, 7, and 8. Becuase we grabbed all of the microglia from the first object, clusters 4, 5, and 8 are likely macrophages and can be checked with Lyz2 expression. We can also check for expression of Cenph which is a marker of proliferating microglia as this would most likely explain why cluster 7 is a bit removed from the sample.
+```{r}
+FeaturePlot(microgliaObject, "Lyz2", pt.size = 0.01, label = T)
+FeaturePlot(microgliaObject, "Cenph", pt.size = 0.01, label = T)
+```
+For this analysis, well call clusters 4, 5, and 8 macrophages, integrate the population with our population identified in the Initial_Cell_Type_Processing. Population 7 shows the expected expression to confirm that it is a distinct microglia population.
+
+```{r}
+for(i in 1: length(microgliaObject$seurat_clusters)){
+  if(microgliaObject$seurat_clusters[i] %in% c("4", "8", "5")){
+    microgliaObject$cell_type[i] <- "macrophages"
+  }
+}
+
+macrophageObject1 <- subset(microgliaObject, cell_type == "macrophages" )
+finalMicrogliaObject <- subset(microgliaObject, cell_type == "microglia")
+```
+
+From this point on, we repeat the process with the other cell types, including the macrophages that we just retrieved.
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+astrocyteObject <- qread("astrocyteObject.qs")
+macrophageObject2 <- qread("macrophageObject.qs")
+oligoObject <- qread("oligoObject.qs")
+OPCObject <- qread("OPCObject.qs")
+```
+
+First well run the astrocytes
+```{r}
+astrocyteObject <- NormalizeData(astrocyteObject, normalization.method = "LogNormalize", scale.factor = 10000)
+astrocyteObject <- FindVariableFeatures(astrocyteObject, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(astrocyteObject)
+astrocyteObject <- ScaleData(astrocyteObject, features = all.genes)
+astrocyteObject <- RunPCA(astrocyteObject, features = VariableFeatures(object = microgliaObject))
+astrocyteObject<-FindNeighbors(astrocyteObject, dims = 1:20)
+astrocyteObject<-FindClusters(astrocyteObject, resolution = 0.2)   
+astrocyteObject<-RunUMAP(astrocyteObject, dims = 1:20)
+DimPlot(astrocyteObject, reduction = "umap", label = T, pt.size = 0.02)
+markers <- FindAllMarkers(astrocyteObject, min.pct = 0.1)
+#View(markers)
+```
+
+First well see if any of the smaller populations that cluster out are enriched for any genes that would indicate doublet populations of different cell types
+```{r}
+FeaturePlot(astrocyteObject, "C1qa", pt.size = 0.01, label = T)
+FeaturePlot(astrocyteObject, "Pdgfra", pt.size = 0.01, label = T)
+FeaturePlot(astrocyteObject, "Plp1", pt.size = 0.01, label = T)
+```
+These identify clusters 5, 6, and 7 are likely doublet populations. Checking the marker genes of the rest of the populations show an enrichment of a range of non cell type specific genes which will have to be further investigated in the final cell type
+
+Filter out the 
+```{r}
+for(i in 1: length(astrocyteObject$seurat_clusters)){
+  if(astrocyteObject$seurat_clusters[i] %in% c("5", "6", "7")){
+    astrocyteObject$cell_type[i] <- "doublets"
+  }
+}
+
+finalAstrocyteObject <- subset(astrocyteObject, cell_type == "astrocytes")
+```
+
+Then the macrophages. We will need to merge the macrophages identified in the Initial_Cell_Type_Processing and the ones derived from the microglia object.
+```{r}
+macrophageObject <- merge(macrophageObject1, macrophageObject2)
+macrophageObject <- JoinLayers(macrophageObject)
+macrophageObject <- NormalizeData(macrophageObject, normalization.method = "LogNormalize", scale.factor = 10000)
+macrophageObject <- FindVariableFeatures(macrophageObject, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(macrophageObject)
+macrophageObject <- ScaleData(macrophageObject, features = all.genes)
+macrophageObject <- RunPCA(macrophageObject, features = VariableFeatures(object = microgliaObject))
+macrophageObject<-FindNeighbors(macrophageObject, dims = 1:20)
+macrophageObject<-FindClusters(macrophageObject, resolution = 0.3)   
+macrophageObject<-RunUMAP(macrophageObject, dims = 1:20)
+DimPlot(macrophageObject, reduction = "umap", label = T, pt.size = 0.02)
+markers <- FindAllMarkers(macrophageObject, min.pct = 0.1)
+#View(markers)
+```
+
+```{r}
+FeaturePlot(macrophageObject, "C1qa", pt.size = 0.01, label = T)
+FeaturePlot(macrophageObject, "Plp1", pt.size = 0.01, label = T)
+```
+Clusters 5 and 6 show strong enough expression of other cell type markers that we can call them doublets and remove them from the final object.
+
+```{r}
+for(i in 1: length(macrophageObject$seurat_clusters)){
+  if(macrophageObject$seurat_clusters[i] %in% c("5", "6")){
+    macrophageObject$cell_type[i] <- "doublets"
+  }
+}
+
+finalmacrophageObject <- subset(macrophageObject, cell_type == "macrophages")
+```
+
+The oligos
+```{r}
+oligoObject <- NormalizeData(oligoObject, normalization.method = "LogNormalize", scale.factor = 10000)
+oligoObject <- FindVariableFeatures(oligoObject, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(oligoObject)
+oligoObject <- ScaleData(oligoObject, features = all.genes)
+oligoObject <- RunPCA(oligoObject, features = VariableFeatures(object = microgliaObject))
+oligoObject<-FindNeighbors(oligoObject, dims = 1:20)
+oligoObject<-FindClusters(oligoObject, resolution = 0.2)   
+oligoObject<-RunUMAP(oligoObject, dims = 1:20)
+DimPlot(oligoObject, reduction = "umap", label = T, pt.size = 0.02)
+markers <- FindAllMarkers(oligoObject, min.pct = 0.1)
+#View(markers)
+```
+
+The cluster 3 outliers are driven by Pdgfra and are just representative of the cells developmental course. Cluster 4 shows some expression of Snap25, but not enought to justify removing it from the downstream analysis.
+```{r}
+FeaturePlot(oligoObject, "Pdgfra", pt.size = 0.01, label = T)
+FeaturePlot(oligoObject, "Snap25", pt.size = 0.01, label = T)
+finalOligoObject <- oligoObject
+```
+
+And finally the OPCs
+```{r}
+OPCObject <- NormalizeData(OPCObject, normalization.method = "LogNormalize", scale.factor = 10000)
+OPCObject <- FindVariableFeatures(OPCObject, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(OPCObject)
+OPCObject <- ScaleData(OPCObject, features = all.genes)
+OPCObject <- RunPCA(OPCObject, features = VariableFeatures(object = microgliaObject))
+OPCObject<-FindNeighbors(OPCObject, dims = 1:20)
+OPCObject<-FindClusters(OPCObject, resolution = 0.2)   
+OPCObject<-RunUMAP(OPCObject, dims = 1:20)
+DimPlot(OPCObject, reduction = "umap", label = T, pt.size = 0.02)
+markers <- FindAllMarkers(OPCObject, min.pct = 0.1)
+#View(markers)
+```
+
+```{r}
+FeaturePlot(OPCObject, "Fcrls", pt.size = 0.01, label = T)
+FeaturePlot(OPCObject, "Cdh8", pt.size = 0.01, label = T)
+
+FeaturePlot(OPCObject, "Slc1a3", pt.size = 0.01, label = T)
+FeaturePlot(OPCObject, "Slc47a1", pt.size = 0.01, label = T)
+FeaturePlot(OPCObject, "Foxd1", pt.size = 0.01, label = T)
+FeaturePlot(OPCObject, "Dcn", pt.size = 0.01, label = T)
+```
+It overarchingly looks like the distanced clusters are highly enriched for contaminating cell types, although not consistently, but for the sake of the analysis, well remove them all from the final OPC object.
+
+```{r}
+for(i in 1: length(OPCObject$seurat_clusters)){
+  if(OPCObject$seurat_clusters[i] %in% c("2", "4", "5", "6")){
+    OPCObject$cell_type[i] <- "doublets"
+  }
+}
+
+finalOPCObject <- subset(OPCObject, cell_type == "OPCs")
+```
+
+Well save our final cell type objects for cell state clustering and annotation next.
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+
+qsave(finalMicrogliaObject, "finalMicrogliaObject.qs")
+qsave(finalAstrocyteObject, "finalAstrocyteObject.qs")
+qsave(finalmacrophageObject, "finalMacrophageObject.qs")
+qsave(finalOligoObject, "finalOligoObject.qs")
+qsave(finalOPCObject, "finalOPCObject.qs")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
