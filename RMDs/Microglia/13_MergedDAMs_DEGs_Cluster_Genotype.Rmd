@@ -152,11 +152,34 @@ for (j in unique(mg$seurat_clusters)) {
 }
 ```
   
+```{r}
+for(i in unique(macs.markers$clusterID)){
+  temp <- subset(macs.markers)
+}
+
+
+
+table(unique(macs.markers$clusterID, macs.markers$gene))
+```
+  
   
 ```{r}  
  
   macs.markers <- degList %>% dplyr::filter(comparison == "clusterATF3 fl/fl hom_vs_others")
+
+  #Initialize the upset plot to plot by cluster 
+  macs.markers.filtered<-filter(macs.markers, FDR < 0.05)
+  macs.markers.filtered<-mutate(macs.markers.filtered, Positive_gene=paste0(logFC>0,"_", gene)) #Distinguish between positive and negatively enriched genes so you can count both
+  de_gs_by_con<-split(macs.markers.filtered, macs.markers.filtered$clusterID)
+  de_gs_by_con <- map(de_gs_by_con, "Positive_gene")
+
+  #Run general upset plot, general and subtypes: 
+  names(de_gs_by_con)
+  upset(fromList(de_gs_by_con), text.scale = 1.4,
+        nsets=20, empty.intersections ="off", sets.bar.color = "#56B4E9")
+
   
+  #Code for labelling genes in Volcano plot 
   geneList <- df["Gene", "Comparison"]
    topLFC <- macs.markers %>% subset(clusterID == 2) %>% arrange(desc(logFC))
    topFDR <- macs.markers %>% subset(clusterID == 2) %>% arrange(FDR)
@@ -175,14 +198,6 @@ for (j in unique(mg$seurat_clusters)) {
     }
   colnames(geneList) <- c("Gene", "ClusterID")
  
-  degList<-mutate(degList, Positive_gene=paste0(logFC>0,"_", gene)) #Distinguish between positive and negatively enriched genes so you can count both
-  de_gs_by_con<-split(degList, degList$comparison)
-  de_gs_by_con <- map(de_gs_by_con, "Positive_gene")
-
-  #Run general upset plot, general and subtypes: 
-  names(de_gs_by_con)
-  upset(fromList(de_gs_by_con), text.scale = 1.4,
-        nsets=20, empty.intersections ="off", sets.bar.color = "#56B4E9")
   
   comparison_index <- which(sapply(qlf, function(x) x$comparison == "clusterATF3 fl/fl hom_vs_others")) # You need to define this based on your comparison naming convention
   

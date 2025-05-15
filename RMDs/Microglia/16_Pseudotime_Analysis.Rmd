@@ -47,7 +47,7 @@ cds <- order_cells(cds)
 
 plot_cells(cds)
 
-plot_cells(cds, genes=c("Tmem119", "Lpl", "Gpnmb", "Cxcl10"))
+plot_cells(cds, genes=c("Tmem119", "Lpl", "Gpnmb", "Cxcl10", "Atf3"))
 
 ```
 

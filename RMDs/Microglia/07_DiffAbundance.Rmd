@@ -39,7 +39,7 @@ table(mg$seurat_clusters)
 
 
 ```{r}
-setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders")
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders/MetaData")
 sampleSheet <- read.csv("ATF3_sampleSheet.csv")
 
 sampleSheet <- sampleSheet %>% select(Brain_id, Genotype, Sex.)
@@ -65,9 +65,9 @@ print(ggplot(as.data.frame(props$Proportions), aes(x = factor(sample, levels = s
           xlab("Animal Id") +
           ylab("Proportions") +
           theme_classic() +
-          theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))) #+
+          theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
           #scale_fill_manual(values=rev(c('#5F4690','#1D6996','#38A6A5','#0F8554','#73AF48','#EDAD08','#E17C05','#CC503E','#94346E'))) +
-          #ggtitle("Cluster prop by sample - LPC vs PBS (macs)", subtitle = paste0("Timepoint: ", i)))
+          ggtitle("Cell State Proportion per Replicate"))
   
 
 
@@ -107,7 +107,7 @@ plot_list<-ggplot(tmp, aes(x = sample, y = Freq, fill = clusters)) +
     theme_classic() +
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
     #scale_fill_manual(values=rev(c('#5F4690','#1D6996','#38A6A5','#0F8554','#73AF48','#EDAD08','#E17C05','#CC503E','#94346E'))) +
-    ggtitle(label = "Temp")
+    ggtitle(label = "Cell State Proportions by Genotype")
   
 #Create strip plots 
 #par(mfrow=c(3,3))

@@ -141,12 +141,13 @@ for (j in unique(mg$seurat_clusters)) {
   
   
 ```{r}  
- 
+for (i in unique(mg$seurat_clusters)) {
+
   macs.markers <- degList %>% dplyr::filter(comparison == "clusterATF3 fl/fl hom_vs_others")
   
   geneList <- df["Gene", "Comparison"]
-   topLFC <- macs.markers %>% subset(clusterID == 5) %>% arrange(desc(logFC))
-   topFDR <- macs.markers %>% subset(clusterID == 5) %>% arrange(FDR)
+   topLFC <- macs.markers %>% subset(clusterID == i) %>% arrange(desc(logFC))
+   topFDR <- macs.markers %>% subset(clusterID == i) %>% arrange(FDR)
    topHits <- c()
    for(b in 1:length(topLFC$gene)){
      if(topFDR$gene[b] %in% topLFC$gene){
@@ -158,7 +159,7 @@ for (j in unique(mg$seurat_clusters)) {
     }
     topHits <- unique(topHits)
     for(j in 1:15){
-      geneList <- rbind(geneList, list(topHits[j], 5))
+      geneList <- rbind(geneList, list(topHits[j], i))
     }
   colnames(geneList) <- c("Gene", "ClusterID")
  
@@ -175,7 +176,7 @@ for (j in unique(mg$seurat_clusters)) {
   
   deg_results <- topTags(qlf[[comparison_index]], n=Inf)$table
   
-  cluster2degs <- macs.markers %>% subset(clusterID == 5)
+  cluster2degs <- macs.markers %>% subset(clusterID == i)
   # Create the volcano plot data
   volcano_data <- data.frame(logFC = cluster2degs$logFC,
                              PValue = -log10(cluster2degs$PValue),
@@ -188,17 +189,20 @@ for (j in unique(mg$seurat_clusters)) {
   
   
     #Decide what genes to label (need to update this)
-    temp <- geneList %>% subset(geneList[,2] == 5)
+    temp <- geneList %>% subset(geneList[,2] == i)
     genes_to_label <- unique(temp[,1])
   
     volcano_data$Label <- ifelse(volcano_data$Gene %in% genes_to_label, volcano_data$Gene, "")
   
     #Final modified volcano plot: Need to specify shape=16 due to bug in ggplot2 that does not apply alpha to points
-    ggplot(data=volcano_data, aes(x=logFC, y=PValue)) +
+  v<-  ggplot(data=volcano_data, aes(x=logFC, y=PValue)) +
       geom_point(aes(color=Significant), alpha=0.4, shape=16) + # Apply color mapping only here. Need to specify shape=16 due to bug in ggplot2 that does not   apply alpha to points
      theme_classic() +
       geom_text_repel(aes(label=Label), max.overlaps = Inf, min.segment.length = 0) +
-      scale_color_manual(values=c("darkblue", "red"))
+      scale_color_manual(values=c("darkblue", "red")) + ggtitle("Control DEGs in Cluster",i)
+  
+  print(v)
+}
 ```
     
     
