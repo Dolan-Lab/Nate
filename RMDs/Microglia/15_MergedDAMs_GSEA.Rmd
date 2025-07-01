@@ -185,3 +185,71 @@ Heatmap(mat, cluster_rows = T, cluster_columns = T, border = TRUE
     }, name = "ScaledExp")
 
 ```
+
+
+```{r}
+setwd('/Users/nate/Desktop/Mikes_ATF3_Data/CSVs/')
+macs.markers <- read.csv("DEGs_by_Cluster_by_Genotype_MergedDAMs_KOselected.csv")
+
+#STEP5: GSEA analysis of microglial gene signatures ####
+mast.test.filtered<-dplyr::select(macs.markers, gene, logFC, clusterID)
+mast.test.filtered<-arrange(mast.test.filtered, clusterID, logFC) #This ordering is critical to get correct results 
+
+#Pull in Vahid's DEG genes to create pathway for each inferred MG cell-type 
+#Vahid.DEGs<-qread("SubstateMG_w1_human_iNPH_.qs") #This is the states broken down in more detail 
+Mike.DEGs<-read.csv("MG_PB_cluster_marker_full_gene_list.csv") #less granular breakdown
+Mike.DEGs<-filter(Mike.DEGs, FDR<0.05)
+Mike.DEGs<-filter(Mike.DEGs, logFC>0) #Just positively expressed genes
+#Mike.DEGs<-filter(Mike.DEGs, cluster_name!="Myeloid_CD300E", cluster_name!="Macrophage_CD200R1")
+Mike.DEGs<-arrange(Mike.DEGs, comparison, desc(logFC)) #This ordering is critical to get correct results 
+#Vahid.DEGs<-filter(Vahid.DEGs, avg_logFC>0.1)
+
+Mike.DEGs<-split(Mike.DEGs,Mike.DEGs$comparison)
+Mike.DEGs.list<-lapply(Mike.DEGs, extract_gene)
+
+#Use Babelgene to convert mouse to human 
+lapply(Mike.DEGs.list, length)
+#elements_to_remove <- c("Myeloid_CD300E", "Macrophage_CD200R1")
+#Vahid.DEGs.list <- Vahid.DEGs.list[setdiff(names(Vahid.DEGs.list), elements_to_remove)]
+#Mike.DEGs.list <- lapply(Mike.DEGs.list, function(x) orthologs(genes = x, species = "mouse", human = TRUE, top=TRUE))
+#Mike.DEGs.list <- lapply(Mike.DEGs.list, function(x) x$symbol)
+#lapply(Mike.DEGs.list, length)
+
+#Run GSEA on positively expressed, signifncant DEGs from all clusters in Gerrits using fgsea (turn this into a function?)
+num_clusters<-length(unique(mast.test.filtered$cluster))
+fgseaRes<-data.table()
+
+for(i in 1:num_clusters) { 
+ cluster.test<-unique(mast.test.filtered$clusterID)[i] #Clusters are 0 indexed in Seurat and Liger 
+ cluster.genes<-dplyr::filter(mast.test.filtered, clusterID==cluster.test)
+ cluster.genes.vector<-cluster.genes$logFC
+ names(cluster.genes.vector)<-cluster.genes$gene
+ fgseaRes.temp <- fgsea(pathways = Mike.DEGs.list ,nperm = 10000
+             ,stats = cluster.genes.vector, minSize = 1)
+ fgseaRes.temp$clusterID<-cluster.test
+ fgseaRes<-rbind(fgseaRes, fgseaRes.temp)
+}
+fgseaRes 
+
+fgseaRes<- dplyr::mutate(fgseaRes, p_sign = sign(NES) * -log10(padj))
+gsea_cast <- dcast(fgseaRes, clusterID ~ pathway, value.var = "p_sign")
+
+p_star <- matrix(ncol= ncol(gsea_cast[,-1]), nrow = nrow(gsea_cast))
+p_star[gsea_cast[,-1] > -log10(0.05) | gsea_cast[,-1] < log10(0.05)] <- "*"
+p_star[gsea_cast[,-1] > -log10(0.01) | gsea_cast[,-1] < log10(0.01)] <- "**"
+p_star[gsea_cast[,-1] > -log10(0.001) | gsea_cast[,-1] < log10(0.001)] <- "***"
+p_star[gsea_cast[,-1] > -log10(0.0001) | gsea_cast[,-1] < log10(0.0001)] <- "****"
+p_star[is.na(p_star)] <- ""
+
+mat<-as.matrix(gsea_cast[,-1]) #Create a matrix and add clusters as rownames 
+rownames(mat)<-gsea_cast$clusterID
+
+Heatmap(mat, cluster_rows = T, cluster_columns = T, border = TRUE
+    , row_title_side = "right", column_title = ""
+    , column_title_side = "bottom", cell_fun = function(j, i, x, y, width, height, fill) {
+     grid.text(sprintf("%s", p_star[i, j]), x, y, gp = gpar(fontsize = 10))
+    }, name = "ScaledExp")
+
+```
+
+

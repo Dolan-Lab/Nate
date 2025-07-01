@@ -32,6 +32,8 @@ Setting the working directory to the raw data folder and loading in the necessar
 setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders")
 
 samples<-list.files()
+samples <- samples[0:7]
+samples 
 
 for(i in 1:length(samples)) {
   if(i==1) {
@@ -61,7 +63,7 @@ table(animal.id)  #Ensure cell counts match the cellranger outputs
 object@meta.data$animal_id<-animal.id 
 
 #Read in the sample detail file
-ATF3.key<-read.csv("/Users/nate/Desktop/Mikes_ATF3_Data/ATF3_sampleSheet.csv")
+ATF3.key<-read.csv("/Users/nate/Desktop/Mikes_ATF3_Data/Raw_Data_Folders/MetaData/ATF3_sampleSheet.csv")
 merge.meta<-merge(x = object@meta.data, y = ATF3.key, by.x="animal_id", by.y="Brain_id", sort=FALSE)
 object@meta.data$animal_id<-merge.meta$animal_id
 object@meta.data$Tube_id <-merge.meta$Sample.ID. 

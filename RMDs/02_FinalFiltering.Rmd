@@ -37,7 +37,7 @@ library(UpSetR)
 Well start with the microglia and go through each cell type to filter out any remaining debris from the data.
 ```{r}
 setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
-microgliaObject <- qread("microgliaObject.qs")
+microgliaObject <- qread("1_microgliaObject.qs")
 ```
 
 First we rerun the standard seurat pipeline on the new object to create a new UMAP and identify new marker genes for the clusters. Again, we will run a lower resolution on the clusters as we are just looking for outlier and are not yet searching for cell state markers.

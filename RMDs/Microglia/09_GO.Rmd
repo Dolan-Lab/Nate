@@ -34,7 +34,7 @@ background<-GetAssayData(macs, slot = "counts")[rowSums(GetAssayData(macs, slot 
 background<-row.names(background) #All genes expressed in microglia >1 transcript 
 background
 macs.markers<-filter(macs.markers, FDR<0.05) #Filter non-significant genes
-macs.markers.cluster<-filter(macs.markers, clusterID ==5) #Select the 
+macs.markers.cluster<-filter(macs.markers, clusterID ==3) #Select the 
 macs.markers.cluster<-filter(macs.markers.cluster, logFC>0) #Remove downregulated genes 
 macs.markers.cluster<-arrange(macs.markers.cluster, desc(logFC)) #Is this necessary? 
 
