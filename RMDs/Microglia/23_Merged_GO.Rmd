@@ -1,0 +1,90 @@
+---
+title: "23_Merged_GO"
+author: "Nathan Haywood"
+date: "2025-06-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(qs)
+macs <- qread("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects/4_ATF3KO_Merged_Microglia.qs")
+macs.markers <- read.csv("/Users/nate/Desktop/Mikes_ATF3_Data/CSVs/Merged_DEGs_by_Cluster_by_Genotype.csv")
+```
+
+
+```{r}
+library(Seurat)
+library(gprofiler2)
+library(clusterProfiler)
+library(ReactomePA)
+library(org.Mm.eg.db) #Mouse genome annotations 
+library(enrichplot)
+library(msigdbr) #for MSigDB access 
+library(babelgene)
+```
+
+```{r}
+#Initialize the Gene Ontology analysis 
+DimPlot(macs, reduction = "umap", label = T, pt.size = 0.01)
+background<-GetAssayData(macs, slot = "counts")[rowSums(GetAssayData(macs, slot = "counts"))>0,] #17600 genes
+background<-row.names(background) #All genes expressed in microglia >1 transcript 
+background
+macs.markers<-filter(macs.markers, FDR<0.05) #Filter non-significant genes
+macs.markers.cluster<-filter(macs.markers, clusterID ==1) #Select the 
+macs.markers.cluster<-filter(macs.markers.cluster, logFC>0) #Remove downregulated genes 
+macs.markers.cluster<-arrange(macs.markers.cluster, desc(logFC)) #Is this necessary? 
+
+#Implement Gene Ontology analysis using Gprofiler
+#Try running with and without significance, underrepresentation, background etc 
+go.results<-gost(query = macs.markers.cluster$gene, organism = "mmusculus", evcodes = TRUE, domain_scope = "annotated", ordered_query = TRUE, significant = TRUE) #All annotated genes background 
+go.results<-gost(query = macs.markers.cluster$gene, organism = "mmusculus" ,evcodes = TRUE, custom_bg = background, ordered_query = TRUE, significant = TRUE) #Custom background, this gives cleaner results
+View(go.results$result) #View all the genes per catagory 
+gostplot(go.results, capped = TRUE, interactive = TRUE) #Interactive plot 
+
+#Implement Gene Ontology analysis using Clusterprofiler
+background.entrez<-gconvert(query = background, organism = "mmusculus", target="ENTREZGENE_ACC",mthreshold = 1 )
+macs.markers.cluster.entrez<-gconvert(query = macs.markers.cluster$gene, organism = "mmusculus", target="ENTREZGENE_ACC",mthreshold = 1 )
+
+#Run ReactomePA and molecular function and Bio Process GO
+#Reactome pathway enrichment analysis for cluster 2 (just genes used here, determined for enrichment against all genes, see Boyle et al. 2004)
+path.analysis<-enrichPathway(gene=macs.markers.cluster.entrez$target,organism = "mouse", pvalueCutoff=0.05, readable=T, universe = background.entrez$target)
+#barplot(path.analysis, showCategory=20) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+View(summary(path.analysis))
+
+go.analysis.MF<-enrichGO(gene = macs.markers.cluster.entrez$target, OrgDb= org.Mm.eg.db, keyType= 'ENTREZID',ont= "MF",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.01,
+                      qvalueCutoff  = 0.05,
+                      readable=TRUE,
+                      universe=background.entrez$target)
+#barplot(go.analysis, showCategory=5) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+View(summary(go.analysis.MF))
+
+go.analysis.BP<-enrichGO(gene = macs.markers.cluster.entrez$target, OrgDb= org.Mm.eg.db, keyType= 'ENTREZID',ont= "BP",
+                      pAdjustMethod = "BH",
+                      pvalueCutoff  = 0.01,
+                      qvalueCutoff  = 0.05,
+                      readable=TRUE,
+                      universe=background.entrez$target)
+#barplot(go.analysis, showCategory=10) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+View(summary(go.analysis.BP))
+
+go.analysis.sim<-clusterProfiler::simplify(go.analysis.BP)
+View(summary(go.analysis.sim))
+#barplot(go.analysis.sim, showCategory=30) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+
+mkegg.analysis<-enrichMKEGG(gene = macs.markers.cluster.entrez$target
+                            , organism = 'mmu', universe = background.entrez$target)
+#barplot(mkegg.analysis, showCategory=30) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+View(summary(mkegg.analysis))
+
+
+kegg.analysis<-enrichKEGG(gene = macs.markers.cluster.entrez$target
+                          , organism = "mmu", universe = background.entrez$target, use_internal_data = FALSE)
+#barplot(kegg.analysis, showCategory=30) #Plotting by counts of genes intersecting. Can also plot as ratio of total genes in that annotation
+View(summary(kegg.analysis))
+```

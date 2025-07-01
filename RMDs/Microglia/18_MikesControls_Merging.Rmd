@@ -1,0 +1,145 @@
+---
+title: "18_MikesControls_Merging"
+author: "Nathan Haywood"
+date: "2025-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(qs)
+library(tidyr)
+
+#library(rliger)
+#library(harmony)
+```
+
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+mikesData <- readRDS("LPC_Nucseq_microglia.rds")
+myData <- qread("3_annotatedMicroglia.qs")
+```
+
+
+```{r}
+mikesData <- subset(mikesData, mikesData$Timepoint == "12dpi")
+mikesData <- subset(mikesData, mikesData$Condition == "LPC")
+mikesData$Sex <- "M"
+```
+
+```{r}
+merged_obj_Atf3KO <- merge(mikesData, myData)
+merged_obj_Atf3KO <- NormalizeData(merged_obj_Atf3KO)
+merged_obj_Atf3KO <- FindVariableFeatures(merged_obj_Atf3KO)
+merged_obj_Atf3KO <- ScaleData(merged_obj_Atf3KO)
+merged_obj_Atf3KO <- RunPCA(merged_obj_Atf3KO)
+
+options(future.globals.maxSize = 8000 * 1024^2)
+merged_obj_Atf3KO <- IntegrateLayers(object = merged_obj_Atf3KO, method = RPCAIntegration, orig.reduction = "pca", new.reduction = "integrated.cca", verbose = FALSE)
+merged_obj_Atf3KO[["RNA"]] <- JoinLayers(merged_obj_Atf3KO[["RNA"]])
+
+merged_obj_Atf3KO <- FindNeighbors(merged_obj_Atf3KO, dims = 1:20, reduction = "integrated.cca")
+merged_obj_Atf3KO <- FindClusters(merged_obj_Atf3KO, resolution = 0.3)
+merged_obj_Atf3KO <- RunUMAP(merged_obj_Atf3KO, dims = 1:20, reduction = "integrated.cca")
+```
+
+```{r}
+DimPlot(merged_obj_Atf3KO)
+DimPlot(merged_obj_Atf3KO, group.by = "Genotype")
+DimPlot(merged_obj_Atf3KO, group.by = "Genotype", split.by = "Sex")
+
+
+FeaturePlot(merged_obj_Atf3KO, "Atf3")
+FeaturePlot(merged_obj_Atf3KO, "Gpnmb")
+FeaturePlot(merged_obj_Atf3KO, "Lpl")
+FeaturePlot(merged_obj_Atf3KO, "Ifit3")
+FeaturePlot(merged_obj_Atf3KO, "Cxcl10")
+FeaturePlot(merged_obj_Atf3KO, "Cenph")
+FeaturePlot(merged_obj_Atf3KO, "Tmem119")
+FeaturePlot(merged_obj_Atf3KO, "Csf1r")
+```
+
+```{r}
+myData <- subset(myData, myData$Genotype == "ATF3 fl/fl hom")
+```
+
+```{r}
+merged_obj <- merge(mikesData, myData)
+merged_obj <- NormalizeData(merged_obj)
+merged_obj <- FindVariableFeatures(merged_obj)
+merged_obj <- ScaleData(merged_obj)
+merged_obj <- RunPCA(merged_obj)
+
+#options(future.globals.maxSize = 8000 * 1024^2)
+merged_obj <- IntegrateLayers(object = merged_obj, method = RPCAIntegration, orig.reduction = "pca", new.reduction = "integrated.cca", verbose = FALSE)
+merged_obj[["RNA"]] <- JoinLayers(merged_obj[["RNA"]])
+
+merged_obj <- FindNeighbors(merged_obj, dims = 1:20, reduction = "integrated.cca")
+merged_obj <- FindClusters(merged_obj, resolution = 0.3)
+merged_obj <- RunUMAP(merged_obj, dims = 1:20, reduction = "integrated.cca")
+```
+
+```{r}
+DimPlot(merged_obj)
+DimPlot(merged_obj, group.by = "Genotype")
+DimPlot(merged_obj, group.by = "Genotype", split.by = "Sex")
+
+
+FeaturePlot(merged_obj, "Atf3")
+FeaturePlot(merged_obj, "Gpnmb")
+FeaturePlot(merged_obj, "Lpl")
+FeaturePlot(merged_obj, "Ifit3")
+FeaturePlot(merged_obj, "Cxcl10")
+FeaturePlot(merged_obj, "Cenph")
+FeaturePlot(merged_obj, "Tmem119")
+```
+
+```{r}
+setwd("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects")
+
+qsave(merged_obj, "4_ControlOnly_Merged_Microglia.qs")
+qsave(merged_obj_Atf3KO, "4_ATF3KO_Merged_Microglia.qs")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

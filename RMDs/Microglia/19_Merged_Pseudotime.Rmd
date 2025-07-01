@@ -1,0 +1,260 @@
+---
+title: "19_Controls_Pseudotime"
+author: "Nathan Haywood"
+date: "2025-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Run Monocle on OPCs in the demyelination condition (try it with both first)
+#Using the filtered OPC dataset 
+
+library(BiocManager)
+library(monocle3)
+library(Seurat)
+library(tidyselect)
+library(dplyr)
+library(R.utils)
+library(devtools)
+#library(liger)
+library(reshape2)
+library(SingleCellExperiment)
+library(qs)
+
+#Load up the filtered, final OPC dataset: 
+Opcs<-qread("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects/4_ControlOnly_Merged_Microglia.qs")
+
+#Subset OPCs by just deemyelinating lesion
+Opcs.LPC<-Opcs
+
+#Create the monocle object, phenodata is going to contain all the interesting metadata for these cells  
+#Note this has changed significantly since Monocle 2
+pd<-Opcs.LPC@meta.data
+fd<-as.data.frame(row.names(as.matrix(GetAssayData(Opcs.LPC, slot = "counts"))))    #as.matrix(GetAssayData(object.2, slot = "counts")
+row.names(fd)=fd$`row.names(as.matrix(GetAssayData(Opcs.LPC, slot = "counts"))`
+colnames(fd)="gene_short_name"
+object.2_matrix<-as.matrix(GetAssayData(Opcs.LPC, slot = "counts")) #Monocle likes to normalize itself.
+cds<-new_cell_data_set(expression_data = as(object.2_matrix, "sparseMatrix"),
+                       cell_metadata = pd,
+                       gene_metadata = fd)
+
+#Pull and manipulate the cell metadata
+colData(cds)
+
+#Monocle3 has preprocessing in single function. Default log normalizes, scales, PCA 
+cds <- preprocess_cds(cds, num_dim = 50)
+
+#NOTE THERE IS NO ALIGNMENT HERE 
+
+## Step 2: Reduce the dimensions using UMAP
+cds <- align_cds(cds, alignment_group = "Genotype")
+cds <- reduce_dimension(cds) #What does aligned mean in this context (preprocess method)
+
+## Step 3: Cluster the cells
+cds <- cluster_cells(cds)
+
+## Step 4: Learn a graph
+cds <- learn_graph(cds)
+plot_cells(cds,
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+
+## Step 5: Order cells
+cds <- order_cells(cds, reduction_method = "UMAP")
+plot_cells(cds, show_trajectory_graph = F)
+
+#Plot by different conditions and replicate
+plot_cells(cds, color_cells_by="seurat_clusters")
+plot_cells(cds, color_cells_by="animal_id")
+plot_cells(cds, color_cells_by="Genotype")
+
+#Plot some marker genes: 
+marker_genes<- c( "Atf3", "Lpl", "Gpnmb")
+plot_cells(cds,
+           genes=marker_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+marker_genes<- c( "Tmem119", "Ifit3", "Cenph")
+plot_cells(cds,
+           genes=marker_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+#Plot the OPC states from Seurat analysis: 
+plot_cells(cds, color_cells_by="seurat_clusters")
+plot_cells(cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=10 , cell_size = 0.5, show_trajectory_graph=FALSE)
+
+#Plot the OPCs in pseudotime 
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           show_trajectory_graph = FALSE,
+           graph_label_size=1.5, cell_size = 0.5)
+
+#THIS DOESN"T WORK 
+#Calculate differential expression by pseudotime: 
+#diff.exp.pseudo <- graph_test(cds, neighbor_graph="principal_graph")
+#deg_filtered <- row.names(subset(diff.exp.pseudo, q_value < 0.05))
+
+#Plot different marker genes as a function of pseudotime and either timepoint 
+#or OPC cluster 
+#Plot marker genes by pseudotime and ligerex cell-type 
+#marker_genes <- c("Glis3", "Myo5b", "Col11a1", "Col4a6", "Ndst3", "Serpina3n", "Nhs", "Id3", "Dock7") #Longer list of good genes 
+marker_genes <- c("Atf3", "Lpl", "Gpnmb", "Tmem119") #Longer list of good genes 
+marker_gene_cds <- cds[rowData(cds)$gene_short_name %in% marker_genes]
+
+plot_genes_in_pseudotime(marker_gene_cds,
+                         color_cells_by="seurat_clusters",
+                         min_expr=0.5)
+#plot_genes_in_pseudotime(marker_gene_cds,
+#                         color_cells_by="Timepoint",
+#                         min_expr=0.5)
+
+```
+
+
+
+```{r}
+#Run Monocle on OPCs in the demyelination condition (try it with both first)
+#Using the filtered OPC dataset 
+
+library(BiocManager)
+library(monocle3)
+library(Seurat)
+library(tidyselect)
+library(dplyr)
+library(R.utils)
+library(devtools)
+#library(liger)
+library(reshape2)
+library(SingleCellExperiment)
+library(qs)
+
+#Load up the filtered, final OPC dataset: 
+Opcs<-qread("/Users/nate/Desktop/Mikes_ATF3_Data/Cell_Type_Objects/4_ATF3KO_Merged_Microglia.qs")
+
+#Subset OPCs by just deemyelinating lesion
+Opcs.LPC<-Opcs
+
+DimPlot(Opcs.LPC)
+
+#Create the monocle object, phenodata is going to contain all the interesting metadata for these cells  
+#Note this has changed significantly since Monocle 2
+pd<-Opcs.LPC@meta.data
+fd<-as.data.frame(row.names(as.matrix(GetAssayData(Opcs.LPC, slot = "counts"))))    #as.matrix(GetAssayData(object.2, slot = "counts")
+row.names(fd)=fd$`row.names(as.matrix(GetAssayData(Opcs.LPC, slot = "counts"))`
+colnames(fd)="gene_short_name"
+object.2_matrix<-as.matrix(GetAssayData(Opcs.LPC, slot = "counts")) #Monocle likes to normalize itself.
+cds<-new_cell_data_set(expression_data = as(object.2_matrix, "sparseMatrix"),
+                       cell_metadata = pd,
+                       gene_metadata = fd)
+
+#Pull and manipulate the cell metadata
+colData(cds)
+
+#Monocle3 has preprocessing in single function. Default log normalizes, scales, PCA 
+cds <- preprocess_cds(cds, num_dim = 50)
+
+#NOTE THERE IS NO ALIGNMENT HERE 
+
+## Step 2: Reduce the dimensions using UMAP
+cds <- align_cds(cds, alignment_group = "Genotype")
+cds <- reduce_dimension(cds) #What does aligned mean in this context (preprocess method)
+
+## Step 3: Cluster the cells
+cds <- cluster_cells(cds)
+
+## Step 4: Learn a graph
+cds <- learn_graph(cds)
+plot_cells(cds,
+           label_groups_by_cluster=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE)
+
+## Step 5: Order cells
+cds <- order_cells(cds, reduction_method = "UMAP")
+plot_cells(cds, show_trajectory_graph = F)
+
+#Plot by different conditions and replicate
+plot_cells(cds, color_cells_by="seurat_clusters")
+plot_cells(cds, color_cells_by="animal_id")
+plot_cells(cds, color_cells_by="Genotype")
+
+#Plot some marker genes: 
+marker_genes<- c( "Atf3", "Lpl", "Gpnmb")
+plot_cells(cds,
+           genes=marker_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+marker_genes<- c( "Tmem119", "Ifit3", "Cenph")
+plot_cells(cds,
+           genes=marker_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+#Plot the OPC states from Seurat analysis: 
+plot_cells(cds, color_cells_by="seurat_clusters")
+plot_cells(cds,
+           color_cells_by = "seurat_clusters",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=TRUE,
+           graph_label_size=10 , cell_size = 0.5, show_trajectory_graph=FALSE)
+
+#Plot the OPCs in pseudotime 
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           show_trajectory_graph = FALSE,
+           graph_label_size=1.5, cell_size = 0.5)
+
+#THIS DOESN"T WORK 
+#Calculate differential expression by pseudotime: 
+#diff.exp.pseudo <- graph_test(cds, neighbor_graph="principal_graph")
+#deg_filtered <- row.names(subset(diff.exp.pseudo, q_value < 0.05))
+
+#Plot different marker genes as a function of pseudotime and either timepoint 
+#or OPC cluster 
+#Plot marker genes by pseudotime and ligerex cell-type 
+#marker_genes <- c("Glis3", "Myo5b", "Col11a1", "Col4a6", "Ndst3", "Serpina3n", "Nhs", "Id3", "Dock7") #Longer list of good genes 
+marker_genes <- c("Atf3", "Lpl", "Gpnmb", "Tmem119") #Longer list of good genes 
+marker_gene_cds <- cds[rowData(cds)$gene_short_name %in% marker_genes]
+
+plot_genes_in_pseudotime(marker_gene_cds,
+                         color_cells_by="seurat_clusters",
+                         min_expr=0.5)
+#plot_genes_in_pseudotime(marker_gene_cds,
+#                         color_cells_by="Timepoint",
+#                         min_expr=0.5)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+

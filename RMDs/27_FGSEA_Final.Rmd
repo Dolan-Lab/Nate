@@ -1,0 +1,149 @@
+---
+title: "FGSEA"
+author: "Nathan Haywood"
+date: "2025-06-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Clean environment
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
+
+# Set seed
+set.seed(123456)
+
+
+library(ComplexHeatmap)
+library(fgsea)
+library(babelgene)
+library(dplyr)
+library(data.table)
+library(tidyverse)
+library(RColorBrewer)
+
+extract_gene<-function(df) {
+  output<-df$gene
+  output
+} #simple function to extract gene column as vector
+extract_Gene<-function(df) {
+  output<-df$Gene
+  output
+} #simple function to extract gene column as vector
+
+
+matrix_to_list <- function(pws){
+  pws.l <- list()
+  for (pw in colnames(pws)) {
+    pws.l[[pw]] <- rownames(pws)[as.logical(pws[, pw])]
+  }
+  return(pws.l)
+}
+
+prepare_gmt <- function(gmt_file, genes_in_data, savefile = FALSE){
+  # for debug
+  #file <- gmt_files[1]
+  #genes_in_data <- df$gene_symbol
+  
+  # Read in gmt file
+  gmt <- gmtPathways(gmt_file)
+  hidden <- unique(unlist(gmt))
+  
+  # Convert gmt file to a matrix with the genes as rows and for each go annotation (columns) the values are 0 or 1
+  mat <- matrix(NA, dimnames = list(hidden, names(gmt)),
+                nrow = length(hidden), ncol = length(gmt))
+  for (i in 1:dim(mat)[2]){
+    mat[,i] <- as.numeric(hidden %in% gmt[[i]])
+  }
+    
+  #Subset to the genes that are present in our data to avoid bias
+  hidden1 <- intersect(genes_in_data, hidden)
+  mat <- mat[hidden1, colnames(mat)[which(colSums(mat[hidden1,])>5)]] # filter for gene sets with more than 5 genes annotated
+  # And get the list again
+  final_list <- matrix_to_list(mat) # for this we use the function we previously defined
+  
+  if(savefile){
+    saveRDS(final_list, file = paste0(gsub('.gmt', '', gmt_file), '_subset_', format(Sys.time(), '%d%m'), '.RData'))
+  }
+  
+  print('Yahoo! .gmt conversion successfull!:)')
+  return(final_list)
+}
+
+setwd('/Users/nate/Desktop/Mikes_ATF3_Data/CSVs/')
+macs.markers <- read.csv("Merged_DEGs_by_Cluster_by_Genotype.csv")
+
+#STEP1: GSEA analysis of microglial gene signatures ####
+macs.markers<-dplyr::select(macs.markers, gene, logFC, clusterID)
+macs.markers<-arrange(macs.markers, clusterID, logFC) #This ordering is critical to get correct results 
+
+# Make the pathways 
+setwd('/Users/nate/Desktop/Mikes_ATF3_Data/MSIGDB_GMTs/')
+gmt_files <- list.files(path = getwd(), pattern = '.gmt', full.names = TRUE)
+gmt_files
+bg_genes <- prepare_gmt(gmt_files[4], macs.markers$gene, savefile = FALSE)
+
+#Run GSEA on positively expressed, signifncant DEGs from all clusters in Gerrits using fgsea (turn this into a function?)
+num_clusters<-length(unique(macs.markers$cluster))
+fgseaRes<-data.table()
+
+for(i in 1:num_clusters) { 
+ cluster.test<-unique(macs.markers$clusterID)[i] #Clusters are 0 indexed in Seurat and Liger 
+ cluster.genes<-dplyr::filter(macs.markers, clusterID==cluster.test)
+ cluster.genes.vector<-cluster.genes$logFC
+ names(cluster.genes.vector)<-cluster.genes$gene
+ fgseaRes.temp <- fgsea(pathways = bg_genes ,nperm = 10000
+             ,stats = cluster.genes.vector, minSize = 1)
+ fgseaRes.temp$clusterID<-cluster.test
+ fgseaRes<-rbind(fgseaRes, fgseaRes.temp)
+}
+fgseaRes 
+#pathways <- dplyr::filter(fgseaRes, clusterID == 1)
+#pathways <- dplyr::filter(pathways, padj < 0.05)
+#pathway_genes <- c()
+#temp <- grep("_MACROPHAGE_", fgseaRes$pathway, perl=TRUE, value=FALSE)
+#for(i in temp){
+#  pathway_genes <- rbind(pathway_genes, fgseaRes[i])
+#}
+#fgseaRes <- dplyr::filter(fgseaRes, pathway %in% pathway_genes$pathway)
+
+fgseaRes<- dplyr::mutate(fgseaRes, p_sign = sign(NES) * -log10(padj))
+gsea_cast <- dcast(fgseaRes, clusterID ~ pathway, value.var = "p_sign")
+gsea_cast[is.na(gsea_cast)] <- 0
+
+p_star <- matrix(ncol= ncol(gsea_cast[,-1]), nrow = nrow(gsea_cast))
+p_star[gsea_cast[,-1] > -log10(0.05) | gsea_cast[,-1] < log10(0.05)] <- "*"
+p_star[gsea_cast[,-1] > -log10(0.01) | gsea_cast[,-1] < log10(0.01)] <- "**"
+p_star[gsea_cast[,-1] > -log10(0.001) | gsea_cast[,-1] < log10(0.001)] <- "***"
+p_star[gsea_cast[,-1] > -log10(0.0001) | gsea_cast[,-1] < log10(0.0001)] <- "****"
+p_star[is.na(p_star)] <- ""
+
+mat<-as.matrix(gsea_cast[,-1]) #Create a matrix and add clusters as rownames 
+rownames(mat)<-gsea_cast$clusterID
+
+Heatmap(mat, cluster_rows = T, cluster_columns = T, border = TRUE
+    , row_title_side = "right", column_title = ""
+    , column_title_side = "bottom", cell_fun = function(j, i, x, y, width, height, fill) {
+     grid.text(sprintf("%s", p_star[i, j]), x, y, gp = gpar(fontsize = 10))
+    }, name = "ScaledExp")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
